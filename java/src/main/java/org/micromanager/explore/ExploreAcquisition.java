@@ -17,6 +17,7 @@
 
 package org.micromanager.explore;
 
+import java.awt.Point;
 import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -231,10 +232,11 @@ public class ExploreAcquisition extends XYTiledAcquisition
       }
 
 
-      int posIndex = pixelStageTranslator_.getFullResPositionIndexFromStageCoords(xPos, yPos);
+      Point tile = pixelStageTranslator_.getTileRowColClosestToStageCoords(xPos, yPos);
+      int row = tile.x;
+      int col = tile.y;
 
-      submitEvents(new int[]{(int) pixelStageTranslator_.getXYPosition(posIndex).getGridRow()},
-              new int[]{(int) pixelStageTranslator_.getXYPosition(posIndex).getGridCol()}, zTopIndex, zBottomIndex);
+      submitEvents(new int[]{(int) row}, new int[]{(int) col}, zTopIndex, zBottomIndex);
    }
 
    public void acquireTiles(final int r1, final int c1, final int r2, final int c2) {
@@ -282,16 +284,11 @@ public class ExploreAcquisition extends XYTiledAcquisition
    private void submitEvents(int[] newPositionRows, int[] newPositionCols,
                              HashMap<String, Integer> zMinIndices,
                                HashMap<String, Integer> zMaxIndices) {
-      int[] posIndices = getPixelStageTranslator()
-              .getPositionIndices(newPositionRows, newPositionCols);
-      List<XYStagePosition> allPositions = getPixelStageTranslator().getPositionList();
-      List<XYStagePosition> selectedXYPositions = new ArrayList<XYStagePosition>();
-      for (int i : posIndices) {
-         selectedXYPositions.add(allPositions.get(i));
-      }
+      List<XYStagePosition> positions = getPixelStageTranslator().getPositions(newPositionRows, newPositionCols);
+
       ArrayList<Function<AcquisitionEvent, Iterator<AcquisitionEvent>>> acqFunctions
               = new ArrayList<Function<AcquisitionEvent, Iterator<AcquisitionEvent>>>();
-      acqFunctions.add(positions(selectedXYPositions));
+      acqFunctions.add(positions(positions));
       for (String zName :  getZDeviceNames()) {
          acqFunctions.add(AcqEventModules.moveStage(zName, zMinIndices.get(zName),
                  zMaxIndices.get(zName) + 1, getZStep(zName), getZOrigin(zName)));
