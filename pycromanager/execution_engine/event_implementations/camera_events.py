@@ -1,11 +1,13 @@
 # TODO: may want to abstract this to data-producing device_implementations in general, not just cameras
-from typing import Iterable
+from typing import Iterable, Optional, Union
+from dataclasses import dataclass, field
 import itertools
 from pycromanager.execution_engine.kernel.acq_event_base import AcquisitionEvent, DataProducing, Stoppable
 from pycromanager.execution_engine.kernel.device_types_base import Camera
 from pycromanager.execution_engine.kernel.data_coords import DataCoordinates
 
 
+@dataclass
 class ReadoutImages(AcquisitionEvent, DataProducing, Stoppable):
     """
     Readout one or more images (and associated metadata) from a camera
@@ -20,11 +22,12 @@ class ReadoutImages(AcquisitionEvent, DataProducing, Stoppable):
             specify the coordinates of the images that will be read out, should be able to provide at least num_images
             elements.
     """
-    num_images: int = None
-    camera: Camera  # TODO: should this change to a buffer object?
-    stop_on_empty: bool = False
+    camera: Optional[Union[Camera, str]] = field(default=None)
+    # TODO: should this change to a buffer object?
+    num_images: int = field(default=None)
+    stop_on_empty: bool = field(default=False)
 
-    def execute(self):
+    def execute(self) -> None:
         # TODO a more efficient way to do this is with callbacks from the camera
         #  but this is not currently implemented, at least for Micro-Manager cameras
         image_counter = itertools.count() if self.num_images is None else range(self.num_images)
@@ -42,12 +45,13 @@ class ReadoutImages(AcquisitionEvent, DataProducing, Stoppable):
 
 
 
+@dataclass
 class StartCapture(AcquisitionEvent):
     """
     Special device instruction that captures images from a camera
     """
     num_images: int
-    camera: Camera
+    camera: Optional[Camera]
 
     def execute(self):
         """
@@ -60,12 +64,12 @@ class StartCapture(AcquisitionEvent):
             self.camera.stop()
             raise e
 
-
+@dataclass
 class StartContinuousCapture(AcquisitionEvent):
     """
     Tell data-producing device to start capturing images continuously, until a stop signal is received
     """
-    camera: Camera
+    camera: Optional[Camera]
 
     def execute(self):
         """
@@ -78,11 +82,12 @@ class StartContinuousCapture(AcquisitionEvent):
             self.camera.stop()
             raise e
 
+@dataclass
 class StopCapture(AcquisitionEvent):
     """
     Tell data-producing device to start capturing images continuously, until a stop signal is received
     """
-    camera: Camera
+    camera: Optional[Camera]
 
     def execute(self):
         self.camera.stop()

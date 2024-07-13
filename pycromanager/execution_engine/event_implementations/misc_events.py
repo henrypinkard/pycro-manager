@@ -1,10 +1,12 @@
 import time
 import warnings
+from dataclasses import dataclass
 
 from pycromanager.execution_engine.kernel.acq_event_base import AcquisitionEvent
 from typing import Optional
 
 
+@dataclass
 class Sleep(AcquisitionEvent):
     """
     Sleep for a specified amount of time
@@ -15,6 +17,7 @@ class Sleep(AcquisitionEvent):
         time.sleep(self.time_s)
 
 # TODO: should this be set start time event?
+@dataclass
 class SetTimeEvent(AcquisitionEvent):
     """Set the time point"""
     # TODO: why is time index needed??
@@ -24,15 +27,3 @@ class SetTimeEvent(AcquisitionEvent):
     def execute(self):
         # TODO: delay until ready??
         warnings.warn("SetTimeEvent not implemented")
-
-
-# TODO:
-class SetChannelEvent(AcquisitionEvent):
-    """Set the channel configuration"""
-    channel_group: str
-    channel: str
-    exposure_ms: Optional[float] = None
-
-    def execute(self):
-        # TODO
-        warnings.warn("SetChannelEvent not implemented")

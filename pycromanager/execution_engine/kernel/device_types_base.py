@@ -7,7 +7,14 @@ from pycromanager.execution_engine.kernel.device import Device
 import numpy as np
 
 
+# TODO: could replace hard coded classes with
+#  T = TypeVar('T')
+#  Positionaer(Generic[T]):
+#  and then (float) or (float, float) for number axes
+#  or make a triggerable mixin that does this
+
 class SingleAxisPositioner(Device):
+    """ A positioner that can move along a single axis (e.g. a z drive used as a focus stage) """
 
     @abstractmethod
     def set_position(self, position: float) -> None:
@@ -27,7 +34,11 @@ class TriggerableSingleAxisPositioner(SingleAxisPositioner):
         ...
 
     @abstractmethod
-    def get_triggerable_sequence_max_length(self) -> int:
+    def get_triggerable_position_sequence_max_length(self) -> int:
+        ...
+
+    @abstractmethod
+    def stop_position_sequence(self) -> None:
         ...
 
 
@@ -48,8 +59,13 @@ class TriggerableDoubleAxisPositioner(DoubleAxisPositioner):
             ...
 
         @abstractmethod
-        def get_triggerable_sequence_max_length(self) -> int:
+        def get_triggerable_position_sequence_max_length(self) -> int:
             ...
+
+        @abstractmethod
+        def stop_position_sequence(self) -> None:
+            ...
+
 
 class Camera(Device):
     """

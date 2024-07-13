@@ -128,6 +128,8 @@ def test_iteration_non_standard_axis():
     coords = DataCoordinates(coordinate_dict={"time": 1, "channel": "DAPI", "depth": 10})
     keys = [key for key in coords]
     assert keys == ["time", "channel", "depth"]
+
+
 #######################################
 #### Test DataCoordinatesIterator #####
 #######################################
@@ -136,6 +138,13 @@ def test_data_coordinates_iterator_create():
     coords_list = [DataCoordinates(time=i, channel="DAPI", z=0) for i in range(3)]
     iterator = DataCoordinatesIterator.create(coords_list)
     assert iterator.is_finite()
+    assert list(iterator) == coords_list
+
+def test_data_coordinates_iterator_reusable():
+    coords_list = [DataCoordinates(time=i, channel="DAPI", z=0) for i in range(3)]
+    iterator = DataCoordinatesIterator.create(coords_list)
+    assert iterator.is_finite()
+    assert list(iterator) == coords_list
     assert list(iterator) == coords_list
 
 def test_data_coordinates_iterator_single():

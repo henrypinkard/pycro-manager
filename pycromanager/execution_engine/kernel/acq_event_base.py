@@ -1,11 +1,10 @@
-from typing import Union, Dict, Optional, Any
+from typing import Union, Dict, Optional, Any, TypeVar, Generic, Iterable
 import numpy as np
-from typing import Iterable
 from abc import ABC, abstractmethod
 import weakref
 
-from pydantic import BaseModel
 from pydantic import field_validator
+from dataclasses import dataclass, field
 
 from pycromanager.execution_engine.kernel.data_coords import DataCoordinates, DataCoordinatesIterator
 from pycromanager.execution_engine.kernel.data_handler import DataHandler
@@ -14,17 +13,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING: # avoid circular imports
     from pycromanager.execution_engine.kernel.acq_future import AcquisitionFuture
 
-class AcquisitionEvent(BaseModel, ABC):
-    num_retries_on_exception: int = 0
-    _future_weakref: Optional[weakref.ReferenceType['AcquisitionFuture']] = None
-    _finished: bool = False
 
-    # TODO: want to make this specific to certain attributes?
-    class Config:
-        arbitrary_types_allowed = True
+T = TypeVar('T')
+
+@dataclass
+class AcquisitionEvent(ABC, Generic[T]):
+    _future_weakref: Optional[weakref.ReferenceType['AcquisitionFuture']] = field(default=None, init=False)
+    _finished: bool = field(default=False, init=False)
+    num_retries_on_exception: int = field(default=0, kw_only=True)
 
     @abstractmethod
-    def execute(self) -> Any:
+    def execute(self) -> T:
         """
         Execute the event. This event is called by the executor, and should be overriden by subclasses to implement
         the event's functionality
@@ -114,7 +113,8 @@ class Abortable:
     def is_abort_requested(self):
         return self._abort_requested
 
-class DataProducing(BaseModel):
+@dataclass
+class DataProducing:
     """
     Acquisition event_implementations that produce data should inherit from this class. They are responsible for putting data
     into the output queue. This class provides a method for putting data into the output queue. It must be passed
@@ -122,20 +122,14 @@ class DataProducing(BaseModel):
     coordinates of each piece of data (i.e. image) that will be produced by the event. For example, {time: 0},
     {time: 1}, {time: 2} for a time series acquisition.
     """
-    data_handler: DataHandler = None
-    # This is eventually an ImageCoordinatesIterator. If an Iterable[ImageCoordinates] or
-    # Iterable[Dict[str, Union[int, str]]] is provided, it will be auto-converted to an ImageCoordinatesIterator
-    image_coordinate_iterator: Union[DataCoordinatesIterator,
-                                     Iterable[DataCoordinates],
-                                     Iterable[Dict[str, Union[int, str]]]]
+    data_coordinate_iterator: Union[DataCoordinatesIterator,
+                                    Iterable[DataCoordinates],
+                                    Iterable[Dict[str, Union[int, str]]]]
+    data_handler: DataHandler = field(default=None)  # This can be added at runtime
 
-    # TODO: is there any point to pydantic if I'm just telling it to ignore stuff anyway?
-    class Config:
-        arbitrary_types_allowed = True
-
-    @field_validator('image_coordinate_iterator', mode='before')
-    def _convert_to_image_coordinates_iterator(cls, v):
-        return DataCoordinatesIterator.create(v)
+    def __post_init__(self):
+        # auto convert it
+        self.data_coordinate_iterator = DataCoordinatesIterator.create(self.data_coordinate_iterator)
 
     def put_data(self, data_coordinates: DataCoordinates, image: np.ndarray, metadata: Dict):
         """

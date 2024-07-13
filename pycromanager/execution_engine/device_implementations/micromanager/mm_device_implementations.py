@@ -1,6 +1,7 @@
 """
 Implementation of Micro-Manager device_implementations.py in terms of the AcqEng bottom API
 """
+import threading
 
 from pycromanager.execution_engine.kernel.device_types_base import (Device, Camera, TriggerableSingleAxisPositioner, TriggerableDoubleAxisPositioner)
 from pycromanager.core import Core
@@ -21,160 +22,163 @@ class MicroManagerDevice(Device):
     collisions
     """
 
-    def __init__(self, device_name=None):
-        super().__init__()
-        # TODO: check if device with name exists
-        self._device_name = device_name
-        self._core = Core()
+    def __init__(self, name=None, _validatename=True):
+        # if name is None, the subclass is responsible for calling self._device_name_noexec so that the device gets
+        # properly registered
+        super().__init__(name)
+        self._core_noexec = Core()
+        if _validatename:
+            loaded_devices = self._core_noexec.get_loaded_devices()
+            if name is not None and not name in loaded_devices:
+                raise Exception(f'Device with name {name} not found')
+            if name is None and len(loaded_devices) > 1:
+                raise ValueError("Multiple Stage device_implementations found, must specify device name")
+            if name is None:
+                self._device_name_noexec = loaded_devices[0]
+            else:
+                if name not in loaded_devices:
+                    raise ValueError(f"Stage {name} not found")
+                self._device_name_noexec = name
 
     def __getattr__(self, name):
-        # First, get the core object using object's __getattribute__
-        if hasattr(self, '_core'): # Will be None on initialization
-            core = object.__getattribute__(self, '_core')
-            device_name = object.__getattribute__(self, 'device_name')
+        device_name = object.__getattribute__(self, '_device_name_noexec')
+        core = object.__getattribute__(self, '_core_noexec')
 
-            # Check if it's a device property
-            if core.has_property(device_name, name):
-                # If it is, return the property value
-                return core.get_property(device_name, name)
+        # Check if it's a device property
+        if core.has_property(device_name, name):
+            # If it is, return the property value
+            return core.get_property(device_name, name)
 
-        # If it's not a device property, use the default behavior
-        return object.__getattribute__(self, name)
+        raise AttributeError(f'Could not find attribute {name}')
 
     def __setattr__(self, name, value):
-        # Check if we're setting up initial attributes
-        if name in ['_device_name', '_core']:
-            return object.__setattr__(self, name, value)
-
         if not name.startswith('_'):
-            # check if exists
-            if not self._core.has_property(self._device_name, name):
-                raise AttributeError(f"Device {self._device_name} does not have property {name}")
+            # public attributes are the Micro-Manager device properties            
+            if not self._core_noexec.has_property(self._device_name_noexec, name):
+                raise AttributeError(f"Device {self._device_name_noexec} does not have property {name}")
             # check if read only
-            if self.is_property_read_only(self._device_name, name):
+            if self.is_property_read_only(name):
                 raise ValueError("Read only properties cannot have values set")
+            self._core_noexec.set_property(self._device_name_noexec, name, value)
         else:
             # private attributes are defined in the class
             object.__setattr__(self, name, value)
 
     def __dir__(self):
         attributes = set(super().__dir__())
-        if hasattr(self, '_core') and self._device_name:
-            try:
-                device_properties = self._core.get_device_property_names(self._device_name)
-                attributes.update(device_properties)
-            except Exception as e:
-                print(f"Warning: Failed to retrieve device properties: {e}")
+        try:
+            device_properties = self._core_noexec.get_device_property_names(self._device_name_noexec)
+            attributes.update(device_properties)
+        except Exception as e:
+            print(f"Warning: Failed to retrieve device properties: {e}")
         return sorted(attributes)
 
-    def _get_mm_property_value(self, property_name: str):
-        if not self._core.has_property(self._device_name, property_name):
-            return None
-        return self._core.get_property(self._device_name, property_name)
-
     def get_allowed_property_values(self, property_name: str) -> List[str]:
-        # TODO
-        return self._core.get_allowed_property_values(self._device_name, property_name)
+        return self._core_noexec.get_allowed_property_values(self._device_name_noexec, property_name)
 
     def is_property_read_only(self, property_name: str) -> bool:
-        return self._core.is_property_read_only(self._device_name, property_name)
+        return self._core_noexec.is_property_read_only(self._device_name_noexec, property_name)
 
-    def is_property_pre_init(self, property_name: str) -> bool:
-        return self._core.is_property_pre_init(self._device_name, property_name)
+    def is_property_hardware_triggerable(self, property_name: str) -> bool:
+        return self._core_noexec.is_property_sequenceable(self._device_name_noexec, property_name)
 
-    def is_property_sequenceable(self, property_name: str) -> bool:
-        return self._core.is_property_sequenceable(self._device_name, property_name)
-
-    def get_property_sequence_max_length(self, property_name: str) -> int:
-        return self._core.get_property_sequence_max_length(self._device_name, property_name)
+    def get_triggerable_sequence_max_length(self, property_name: str) -> int:
+        return self._core_noexec.get_property_sequence_max_length(self._device_name_noexec, property_name)
 
     def get_property_limits(self, property_name: str) -> (float, float):
-        if not self._core.has_property_limits(self._device_name, property_name):
+        if not self._core_noexec.has_property_limits(self._device_name_noexec, property_name):
             return None
-        return (self._core.get_property_lower_limit(self._device_name, property_name),
-                self._core.get_property_upper_limit(self._device_name, property_name))
+        return (self._core_noexec.get_property_lower_limit(self._device_name_noexec, property_name),
+                self._core_noexec.get_property_upper_limit(self._device_name_noexec, property_name))
 
-    def load_property_sequence(self, property_name: str, event_sequence: Iterable[Union[str, float, int]]):
-        # TODO: check if within max sequence length
-        # TODO: strvector stuff
-        self._core.load_property_sequence(self._device_name, property_name, event_sequence)
+    def load_triggerable_sequence(self, property_name: str, value_sequence: Iterable[Union[str, float, int]]):
+        self._core_noexec.loadPropertySequence(self._device_name_noexec, property_name, value_sequence)
 
-    def start_property_sequence(self, property_name: str):
-        self._core.start_property_sequence(self._device_name, property_name)
+    def start_triggerable_sequence(self, property_name: str):
+        """
+        Tell the device to begin accepting the TTL triggers to advance to the next value in its sequence
+        """
+        self._core_noexec.start_property_sequence(self._device_name_noexec, property_name)
 
-    def stop_property_sequence(self, property_name: str):
-        self._core.stop_property_sequence(self._device_name, property_name)
+    def stop_triggerable_sequence(self, property_name: str):
+        self._core_noexec.stop_property_sequence(self._device_name_noexec, property_name)
 
 
 
 class MicroManagerSingleAxisStage(MicroManagerDevice, TriggerableSingleAxisPositioner):
 
-    def __init__(self, device_name=None):
-        super().__init__(device_name=device_name)
-        stage_names = self._core.get_loaded_devices_of_type(5)  # 5 means stage...
+    def __init__(self, name=None):
+        super().__init__(name, _validatename=False)
+        stage_names = self._core_noexec.get_loaded_devices_of_type(5)  # 5 means stage...
         if not stage_names:
             raise ValueError("No Stage device_implementations found")
-        if device_name is None and len(stage_names) > 1:
+        if name is None and len(stage_names) > 1:
             raise ValueError("Multiple Stage device_implementations found, must specify device name")
 
-        if device_name is None:
-            self._device_name = stage_names[0]
+        if name is None:
+            self._device_name_noexec = stage_names[0]
         else:
-            if device_name not in stage_names:
-                raise ValueError(f"Stage {device_name} not found")
-            self._device_name = device_name
+            if name not in stage_names:
+                raise ValueError(f"Stage {name} not found")
+            self._device_name_noexec = name
 
     def set_position(self, position: float) -> None:
-        self._core.set_position(self._device_name, position)
+        self._core_noexec.set_position(self._device_name_noexec, position)
 
     def get_position(self) -> float:
-        return self._core.get_position(self._device_name)
+        return self._core_noexec.get_position(self._device_name_noexec)
 
     def set_position_sequence(self, positions: np.ndarray) -> None:
-        if not self._core.is_stage_sequenceable(self._device_name):
+        if not self._core_noexec.is_stage_sequenceable(self._device_name_noexec):
             raise ValueError("Stage does not support sequencing")
-        max_length = self._core.get_stage_sequence_max_length(self._device_name)
+        max_length = self._core_noexec.get_stage_sequence_max_length(self._device_name_noexec)
         if len(positions) > max_length:
             raise ValueError(f"Sequence length {len(positions)} exceeds maximum length {max_length}")
         z_sequence = pymmcore.DoubleVector()
         for z in positions:
             z_sequence.append(float(z))
-        self._core.load_stage_sequence(self._device_name, z_sequence)
+        self._core_noexec.load_stage_sequence(self._device_name_noexec, z_sequence)
+        self._core_noexec.start_stage_sequence(self._device_name_noexec)
 
-    def get_triggerable_sequence_max_length(self) -> int:
-        if not self._core.is_stage_sequenceable(self._device_name):
+    def get_triggerable_position_sequence_max_length(self) -> int:
+        if not self._core_noexec.is_stage_sequenceable(self._device_name_noexec):
             raise ValueError("Stage does not support sequencing")
-        return self._core.get_stage_sequence_max_length(self._device_name)
+        return self._core_noexec.get_stage_sequence_max_length(self._device_name_noexec)
+
+    def stop_position_sequence(self) -> None:
+        if not self._core_noexec.is_stage_sequenceable(self._device_name_noexec):
+            raise ValueError("Stage does not support sequencing")
+        return self._core_noexec.stop_stage_sequence(self._device_name_noexec)
+
 
 
 class MicroManagerXYStage(MicroManagerDevice, TriggerableDoubleAxisPositioner):
 
-    def __init__(self, device_name=None):
-        super().__init__(device_name=device_name)
-        self._core = Core()
-        stage_names = self._core.get_loaded_devices_of_type(6)  # 5 means stage...
+    def __init__(self, name=None):
+        super().__init__(_validatename=False)
+        stage_names = self._core_noexec.get_loaded_devices_of_type(6)  # 5 means stage...
         if not stage_names:
             raise ValueError("No XYStage device_implementations found")
-        if device_name is None and len(stage_names) > 1:
+        if name is None and len(stage_names) > 1:
             raise ValueError("Multiple XYStage device_implementations found, must specify device name")
 
-        if device_name is None:
-            self._device_name = stage_names[0]
+        if name is None:
+            self._device_name_noexec = stage_names[0]
         else:
-            if device_name not in stage_names:
-                raise ValueError(f"XYStage {device_name} not found")
-            self._device_name = device_name
+            if name not in stage_names:
+                raise ValueError(f"XYStage {name} not found")
+            self._device_name_noexec = name
 
     def set_position(self, x: float, y: float) -> None:
-        self._core.set_xy_position(self._device_name, x, y)
+        self._core_noexec.set_xy_position(self._device_name_noexec, x, y)
 
     def get_position(self) -> (float, float):
-        return self._core.get_xy_position(self._device_name)
+        return self._core_noexec.get_xy_position(self._device_name_noexec)
 
     def set_position_sequence(self, positions: np.ndarray) -> None:
-        if not self._core.is_xy_stage_sequenceable(self._device_name):
+        if not self._core_noexec.is_xy_stage_sequenceable(self._device_name_noexec):
             raise ValueError("Stage does not support sequencing")
-        max_length = self._core.get_xy_stage_sequence_max_length(self._device_name)
+        max_length = self._core_noexec.get_xy_stage_sequence_max_length(self._device_name_noexec)
         if len(positions) > max_length:
             raise ValueError(f"Sequence length {len(positions)} exceeds maximum length {max_length}")
         x_sequence = pymmcore.DoubleVector()
@@ -182,35 +186,41 @@ class MicroManagerXYStage(MicroManagerDevice, TriggerableDoubleAxisPositioner):
         for x, y in positions:
             x_sequence.append(float(x))
             y_sequence.append(float(y))
-        self._core.load_xy_stage_sequence(self._device_name, x_sequence, y_sequence)
+        self._core_noexec.load_xy_stage_sequence(self._device_name_noexec, x_sequence, y_sequence)
+        self._core_noexec.start_xy_stage_sequence(self._device_name_noexec)
 
-    def get_triggerable_sequence_max_length(self) -> int:
-        if not self._core.is_xy_stage_sequenceable(self._device_name):
+    def get_triggerable_position_sequence_max_length(self) -> int:
+        if not self._core_noexec.is_xy_stage_sequenceable(self._device_name_noexec):
             raise ValueError("Stage does not support sequencing")
-        return self._core.get_xy_stage_sequence_max_length(self._device_name)
+        return self._core_noexec.get_xy_stage_sequence_max_length(self._device_name_noexec)
+
+    def stop_position_sequence(self) -> None:
+        if not self._core_noexec.is_xy_stage_sequenceable(self._device_name_noexec):
+            raise ValueError("Stage does not support sequencing")
+        return self._core_noexec.stop_xy_stage_sequence(self._device_name_noexec)
 
 
 class MicroManagerCamera(MicroManagerDevice, Camera):
 
-    def __init__(self, device_name=None):
+    def __init__(self, name=None):
         """
-        :param device_name: Name of the camera device in Micro-Manager. If None, and there is only one camera, that camera
+        :param name: Name of the camera device in Micro-Manager. If None, and there is only one camera, that camera
         will be used. If None and there are multiple cameras, an error will be raised
         """
-        super().__init__(device_name=device_name)
-        self._core = Core()
-        camera_names = self._core.get_loaded_devices_of_type(2) # 2 means camera...
+        super().__init__(_validatename=False)
+        self._core_noexec = Core()
+        camera_names = self._core_noexec.get_loaded_devices_of_type(2) # 2 means camera...
         if not camera_names:
             raise ValueError("No cameras found")
-        if device_name is None and len(camera_names) > 1:
+        if name is None and len(camera_names) > 1:
             raise ValueError("Multiple cameras found, must specify device name")
 
-        if device_name is None:
-            self._device_name = camera_names[0]
+        if name is None:
+            self._device_name_noexec = camera_names[0]
         else:
-            if device_name not in camera_names:
-                raise ValueError(f"Camera {device_name} not found")
-            self._device_name = device_name
+            if name not in camera_names:
+                raise ValueError(f"Camera {name} not found")
+            self._device_name_noexec = name
 
         # Make a thread to execute calls to snap asynchronously
         # This may be removable in the the future with the execution_engine camera API if something similar is implemented at the core
@@ -218,12 +228,11 @@ class MicroManagerCamera(MicroManagerDevice, Camera):
         self._last_snap = None
         self._snap_active = False
 
-
     def set_exposure(self, exposure: float) -> None:
-        self._core.set_exposure(self._device_name, exposure)
+        self._core_noexec.set_exposure(self._device_name_noexec, exposure)
 
     def get_exposure(self) -> float:
-        return self._core.get_exposure(self._device_name)
+        return self._core_noexec.get_exposure(self._device_name_noexec)
 
     def arm(self, frame_count=None) -> None:
         if frame_count == 1:
@@ -233,7 +242,7 @@ class MicroManagerCamera(MicroManagerDevice, Camera):
             # No need to prepare for continuous sequence acquisition
             pass
         else:
-            self._core.prepare_sequence_acquisition(self._device_name)
+            self._core_noexec.prepare_sequence_acquisition(self._device_name_noexec)
         self._frame_count = frame_count
 
     def start(self) -> None:
@@ -241,23 +250,23 @@ class MicroManagerCamera(MicroManagerDevice, Camera):
             # Execute this on a separate thread because it blocks
             def do_snap():
                 self._snap_active = True
-                self._core.snap_image()
+                self._core_noexec.snap_image()
                 self._snap_active = False
 
             self._last_snap = self._snap_executor.submit(do_snap)
         elif self._frame_count is None:
             # set core camera to this camera because there's no version of this call where you specify the camera
-            self._core.set_camera_device(self._device_name)
-            self._core.start_continuous_sequence_acquisition(0)
+            self._core_noexec.set_camera_device(self._device_name_noexec)
+            self._core_noexec.start_continuous_sequence_acquisition(0)
         else:
-            self._core.start_sequence_acquisition(self._frame_count, 0, True)
+            self._core_noexec.start_sequence_acquisition(self._frame_count, 0, True)
 
     def stop(self) -> None:
         # This will stop sequences. There is not way to stop snap_image
-        self._core.stop_sequence_acquisition(self._device_name)
+        self._core_noexec.stop_sequence_acquisition(self._device_name_noexec)
 
     def is_stopped(self) -> bool:
-        return not self._core.is_sequence_running(self._device_name) and not self._snap_active
+        return not self._core_noexec.is_sequence_running(self._device_name_noexec) and not self._snap_active
 
     def pop_image(self, timeout=None) -> (np.ndarray, dict):
         if self._frame_count != 1:
@@ -265,7 +274,7 @@ class MicroManagerCamera(MicroManagerDevice, Camera):
             start_time = time.time()
             while True:
                 try:
-                    pix = self._core.pop_next_image_md(0, 0, md)
+                    pix = self._core_noexec.pop_next_image_md(0, 0, md)
                 except IndexError as e:
                     pix = None
                 if pix is not None:
@@ -286,4 +295,4 @@ class MicroManagerCamera(MicroManagerDevice, Camera):
 
             # Is there no metadata when calling snapimage?
             metadata = {}
-            return self._core.get_image(), metadata
+            return self._core_noexec.get_image(), metadata

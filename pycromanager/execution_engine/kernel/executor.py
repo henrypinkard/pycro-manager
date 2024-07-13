@@ -6,18 +6,30 @@ from collections import deque
 from typing import Deque
 import warnings
 import traceback
-from typing import Union, Iterable
+from typing import Union, Iterable, List
+from dataclasses import dataclass
+import queue
+import sys
+
 
 from pycromanager.execution_engine.kernel.acq_future import AcquisitionFuture
 from pycromanager.execution_engine.kernel.acq_event_base import AcquisitionEvent, Stoppable, Abortable
 from pycromanager.execution_engine.kernel.data_handler import DataHandler
 
 
+class MultipleExceptions(Exception):
+    def __init__(self, exceptions: List[Exception]):
+        self.exceptions = exceptions
+        messages = [f"{type(e).__name__}: {''.join(traceback.format_exception(type(e), e, e.__traceback__))}" for e in exceptions]
+        super().__init__("Multiple exceptions occurred:\n" + "\n".join(messages))
+
 class ExecutionEngine:
 
     _instance = None
     _lock = threading.Lock()
     _debug = False
+    _exceptions = queue.Queue()
+    _devices = {}
 
     def __new__(cls, *args, **kwargs):
         with cls._lock:
@@ -40,6 +52,29 @@ class ExecutionEngine:
         return cls._instance
 
     @classmethod
+    def get_device(cls, device_name):
+        """
+        Get a device by name
+        """
+        if device_name not in cls.get_instance()._devices:
+            raise ValueError(f"No device with name {device_name}")
+        return cls.get_instance()._devices[device_name]
+
+    @classmethod
+    def register_device(cls, name, device):
+        """
+        Called automatically when a Device is created so that the ExecutionEngine can keep track of all devices
+        and look them up by their string names
+        """
+        # Make sure there's not already a device with this name
+        executor = cls.get_instance()
+        if name is not None:
+            # only true after initialization, but this gets called after all the subclass constructors
+            if name in executor._devices and executor._devices[name] is not device:
+                raise ValueError(f"Device with name {name} already exists")
+            executor._devices[name] = device
+
+    @classmethod
     def on_main_executor_thread(cls):
         """
         Check if the current thread is an executor thread
@@ -59,6 +94,23 @@ class ExecutionEngine:
 
     def set_debug_mode(self, debug):
         ExecutionEngine._debug = debug
+
+    @classmethod
+    def _log_exception(cls, exception):
+        ExecutionEngine.get_instance()._exceptions.put(exception)
+
+    def check_exceptions(self):
+        """
+        Check if any exceptions have been raised during the execution of events and raise them if so
+        """
+        exceptions = self._exceptions
+        self._exceptions = queue.Queue()
+        exceptions = list(exceptions.queue)
+        if exceptions:
+            if len(exceptions) == 1:
+                raise exceptions[0]
+            else:
+                raise MultipleExceptions(exceptions)
 
     def submit(self, event_or_events: Union[AcquisitionEvent, Iterable[AcquisitionEvent]],
                transpile: bool = True, prioritize: bool = False, use_free_thread: bool = False,
@@ -145,6 +197,9 @@ class ExecutionEngine:
         """
         Stop all threads managed by this executor and wait for them to finish
         """
+        # For now just let the devices be garbage collected.
+        # TODO: add explicit shutdowns for devices here?
+        self._devices = None
         for thread in self._thread_managers:
             thread.shutdown()
         for thread in self._thread_managers:
@@ -220,17 +275,17 @@ class _ExecutionThreadManager:
                         print("Finished executing", event.__class__.__name__, threading.current_thread())
                     break
                 except Exception as e:
-                    warnings.warn(f"Exception during event execution, retrying {num_retries} more times")
-                    traceback.print_exc()
+                    warnings.warn(f"{e} during execution of {event}" + (", retrying {num_retries} more times"
+                                  if num_retries > 0 else ""))
+                    # traceback.print_exc()
                     exception = e
-
+            if exception is not None:
+                ExecutionEngine.get_instance()._log_exception(exception)
             stopped = isinstance(event, Stoppable) and event.is_stop_requested()
             aborted = isinstance(event, Abortable) and event.is_abort_requested()
             event._post_execution(return_value=return_val, stopped=stopped, aborted=aborted, exception=exception)
             with self._addition_condition:
                 self._event_executing = False
-            if exception:
-                raise exception
             event = None
 
     def is_free(self):

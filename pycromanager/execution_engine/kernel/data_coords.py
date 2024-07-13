@@ -178,12 +178,15 @@ class DataCoordinatesIterator:
             coord = DataCoordinates(**coord)
         return all(getattr(coord, key) == value for key, value in target.__dict__.items())
 
-
     def _initialize(self, data):
         self._backing_iterable = data
-        self._iterator = iter(data)
+        self._reset_iterator()
+
+    def _reset_iterator(self):
+        self._iterator = iter(self._backing_iterable)
 
     def __iter__(self):
+        self._reset_iterator()
         return self
 
     def __next__(self):
@@ -194,13 +197,11 @@ class DataCoordinatesIterator:
             elif isinstance(next_item, DataCoordinates):
                 return next_item
             else:
-                raise TypeError(f"Unexpected item type: {type(next_item)}. Expected ImageCoordinates or dict.")
+                raise TypeError(f"Unexpected item type: {type(next_item)}. Expected DataCoordinates or dict.")
         except StopIteration:
             raise
         except Exception as e:
             raise TypeError(f"Error processing next item: {str(e)}")
-
-
     def __str__(self):
         if isinstance(self._backing_iterable, Generator):
             return "DataCoordinatesIterator(dynamic)"
